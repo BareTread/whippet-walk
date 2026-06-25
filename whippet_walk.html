@@ -254,16 +254,20 @@ function render(t){
 }
 
 let last=performance.now(), fps=60, lastDebug=-99999, stats={faceCount:0,vertexCount:0,drawn:0};
+let rafPending=false;
+function schedule(){ if(!rafPending){ rafPending=true; requestAnimationFrame(frame); } }
 function frame(now){
+  rafPending=false;
   const dt=Math.min(.05,(now-last)/1000); last=now; fps = fps*.9 + (1/Math.max(dt,.001))*.1;
   stats = render(now/1000);
   if(now-lastDebug>120){
     debug.textContent = `FPS ${fps.toFixed(0)}\nvertices ${stats.vertexCount}  faces ${stats.faceCount}  drawn ${stats.drawn}\ncamera yaw ${cam.yaw.toFixed(2)}  pitch ${cam.pitch.toFixed(2)}  zoom ${cam.dist.toFixed(1)}\nmouse drag: orbit   wheel: zoom   D: overlay`;
     lastDebug=now;
   }
-  requestAnimationFrame(frame);
+  schedule();
 }
-requestAnimationFrame(frame);
+schedule();
+setInterval(()=>{ if(performance.now()-last>120) frame(performance.now()); },120);
 })();
 </script>
 </body>
