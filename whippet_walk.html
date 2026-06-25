@@ -253,7 +253,7 @@ function render(t){
   return {faceCount, vertexCount, drawn:draw.length};
 }
 
-let last=performance.now(), fps=60, lastDebug=0, stats={faceCount:0,vertexCount:0,drawn:0};
+let last=performance.now(), fps=60, lastDebug=-99999, stats={faceCount:0,vertexCount:0,drawn:0};
 function frame(now){
   const dt=Math.min(.05,(now-last)/1000); last=now; fps = fps*.9 + (1/Math.max(dt,.001))*.1;
   stats = render(now/1000);
