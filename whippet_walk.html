@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Whippet Walk</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#d9f0ff;font-family:system-ui,-apple-system,Segoe UI,sans-serif}
+  canvas{display:block;width:100vw;height:100vh;cursor:grab;touch-action:none}
+  canvas:active{cursor:grabbing}
+  #debug{position:fixed;left:12px;top:12px;padding:10px 12px;border-radius:12px;background:rgba(18,32,31,.68);color:#e9fff3;font:12px/1.35 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre;pointer-events:none;box-shadow:0 8px 30px rgba(0,0,0,.18);backdrop-filter:blur(6px)}
+</style>
+</head>
+<body>
+<canvas id="c" aria-label="Animated low-poly man walking whippets in a park"></canvas>
+<div id="debug"></div>
+<script>
+(() => {
+'use strict';
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const debug = document.getElementById('debug');
+const TAU = Math.PI * 2;
+let W = 0, H = 0, DPR = 1;
+function resize(){
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  W = Math.max(1, innerWidth); H = Math.max(1, innerHeight);
+  canvas.width = Math.floor(W * DPR); canvas.height = Math.floor(H * DPR);
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+}
+addEventListener('resize', resize, {passive:true}); resize();
+
+const add=(a,b)=>[a[0]+b[0],a[1]+b[1],a[2]+b[2]];
+const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+const mul=(a,s)=>[a[0]*s,a[1]*s,a[2]*s];
+const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+const len=a=>Math.hypot(a[0],a[1],a[2]) || 1;
+const norm=a=>mul(a,1/len(a));
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const mix=(a,b,t)=>a+(b-a)*t;
+function rgb(hex){
+  if(!rgb.cache) rgb.cache = new Map();
+  if(rgb.cache.has(hex)) return rgb.cache.get(hex);
+  const s = hex.replace('#','');
+  const r = parseInt(s.slice(0,2),16), g = parseInt(s.slice(2,4),16), b = parseInt(s.slice(4,6),16);
+  const out=[r,g,b]; rgb.cache.set(hex,out); return out;
+}
+function shaded(hex, k){
+  const c = rgb(hex); k = clamp(k,0,1.25);
+  return `rgb(${Math.round(c[0]*k)},${Math.round(c[1]*k)},${Math.round(c[2]*k)})`;
+}
+
+let tris = [];
+function tri(a,b,c,color){ tris.push({v:[a,b,c], color}); }
+function quad(a,b,c,d,color){ tri(a,b,c,color); tri(a,c,d,color); }
+function curveZ(x){ return Math.sin(x * .45) * .35; }
+function curveDz(x){ return Math.cos(x * .45) * .45 * .35; }
+function yawForPath(x){ return Math.atan2(1, curveDz(x)); }
+function localToWorld(base,yaw,p){
+  const s=Math.sin(yaw), c=Math.cos(yaw);
+  return [base[0] + p[0]*c + p[2]*s, base[1] + p[1], base[2] - p[0]*s + p[2]*c];
+}
+function basisAlong(p1,p2){
+  const axis = norm(sub(p2,p1));
+  const helper = Math.abs(axis[1]) > .82 ? [1,0,0] : [0,1,0];
+  const b1 = norm(cross(axis, helper));
+  const b2 = norm(cross(axis, b1));
+  return [axis,b1,b2];
+}
+function frustumWorld(p1,p2,r1,r2,sides,color,cap=false){
+  const [,b1,b2] = basisAlong(p1,p2);
+  const a=[], b=[];
+  for(let i=0;i<sides;i++){
+    const q = i / sides * TAU, co=Math.cos(q), si=Math.sin(q);
+    a.push(add(p1, add(mul(b1,co*r1), mul(b2,si*r1))));
+    b.push(add(p2, add(mul(b1,co*r2), mul(b2,si*r2))));
+  }
+  for(let i=0;i<sides;i++) quad(a[i], a[(i+1)%sides], b[(i+1)%sides], b[i], color);
+  if(cap){
+    for(let i=1;i<sides-1;i++){ if(r1>0) tri(a[0],a[i],a[i+1],color); if(r2>0) tri(b[0],b[i+1],b[i],color); }
+  }
+}
+function frustumLocal(base,yaw,p1,p2,r1,r2,sides,color,cap=false){
+  frustumWorld(localToWorld(base,yaw,p1), localToWorld(base,yaw,p2), r1, r2, sides, color, cap);
+}
+function boxLocal(base,yaw,center,size,color){
+  const [sx,sy,sz] = [size[0]/2,size[1]/2,size[2]/2];
+  const pts = [[-sx,-sy,-sz],[sx,-sy,-sz],[sx,sy,-sz],[-sx,sy,-sz],[-sx,-sy,sz],[sx,-sy,sz],[sx,sy,sz],[-sx,sy,sz]]
+    .map(p=>localToWorld(base,yaw,add(center,p)));
+  quad(pts[0],pts[1],pts[2],pts[3],color); quad(pts[5],pts[4],pts[7],pts[6],color);
+  quad(pts[4],pts[0],pts[3],pts[7],color); quad(pts[1],pts[5],pts[6],pts[2],color);
+  quad(pts[3],pts[2],pts[6],pts[7],color); quad(pts[4],pts[5],pts[1],pts[0],color);
+}
+function ellipsoidLocal(base,yaw,center,scale,color,seg=7,rings=4){
+  for(let r=0;r<rings;r++){
+    const lat1 = -Math.PI/2 + Math.PI*r/rings, lat2 = -Math.PI/2 + Math.PI*(r+1)/rings;
+    for(let i=0;i<seg;i++){
+      const lon1 = TAU*i/seg, lon2 = TAU*(i+1)/seg;
+      const p = (lat,lon)=>localToWorld(base,yaw,[center[0]+Math.cos(lat)*Math.cos(lon)*scale[0], center[1]+Math.sin(lat)*scale[1], center[2]+Math.cos(lat)*Math.sin(lon)*scale[2]]);
+      const a=p(lat1,lon1), b=p(lat1,lon2), c=p(lat2,lon2), d=p(lat2,lon1);
+      if(r===0) tri(a,c,d,color); else if(r===rings-1) tri(a,b,d,color); else quad(a,b,c,d,color);
+    }
+  }
+}
+
+function addGround(){
+  const grass='#83c86b', grass2='#6ebf62', path='#c9ad77';
+  quad([-18,0,-10],[18,0,-10],[18,0,10],[-18,0,10],grass);
+  for(let i=-18;i<18;i+=3){
+    const z1=-9+((i*i)%7), z2=z1+1.6;
+    tri([i,0.012,z1],[i+1.8,0.012,z1+.3],[i+.5,0.012,z2], i%2 ? '#79bd63' : grass2);
+  }
+  const pts=[];
+  for(let x=-14;x<=14;x+=1.4){
+    const z=curveZ(x), dz=curveDz(x), n=norm([-dz,0,1]);
+    pts.push({l:[x+n[0]*1.05,.026,z+n[2]*1.05], r:[x-n[0]*1.05,.026,z-n[2]*1.05]});
+  }
+  for(let i=0;i<pts.length-1;i++) quad(pts[i].l, pts[i+1].l, pts[i+1].r, pts[i].r, path);
+}
+function addTree(x,z,s){
+  frustumWorld([x,0,z],[x,.85*s,z],.14*s,.11*s,6,'#855b33',true);
+  frustumWorld([x,.55*s,z],[x,1.75*s,z],.8*s,.05*s,7,'#3f8d4d',true);
+  frustumWorld([x,.95*s,z],[x,2.22*s,z],.62*s,0,7,'#4fa65a',true);
+  frustumWorld([x-.1*s,1.05*s,z+.06*s],[x-.25*s,1.95*s,z+.06*s],.45*s,0,6,'#61b961',true);
+}
+
+function addMan(t){
+  const x = ((t*.78 + 9) % 18) - 9;
+  const yaw = yawForPath(x);
+  const base = [x, .035*Math.sin(t*10.2), curveZ(x)];
+  const phase = t * 5.15;
+  boxLocal(base,yaw,[0,1.72,0],[.48,1.05,.34],'#2b4058');
+  boxLocal(base,yaw,[0,1.22,-.01],[.52,.42,.37],'#20354a');
+  ellipsoidLocal(base,yaw,[0,2.42,.02],[.24,.28,.22],'#d7aa82',7,4);
+  ellipsoidLocal(base,yaw,[0,2.33,.17],[.22,.20,.11],'#4a2b1e',7,3); // distinct beard
+  boxLocal(base,yaw,[0,2.63,-.02],[.35,.12,.28],'#3a2a20');
+  boxLocal(base,yaw,[0,2.47,.24],[.09,.07,.08],'#c58e6c');
+  const leg = (side, off) => {
+    const s = Math.sin(phase+off), lift = Math.max(0, Math.cos(phase+off))*.06;
+    const hip=[side*.14,1.18,0], knee=[side*.13,.63,s*.16], foot=[side*.13,.06-lift,-s*.25];
+    frustumLocal(base,yaw,hip,knee,.07,.06,5,'#1b2432'); frustumLocal(base,yaw,knee,foot,.06,.045,5,'#18202c');
+    boxLocal(base,yaw,[foot[0],.04,foot[2]+.07],[.16,.07,.26],'#151719');
+  };
+  leg(-1,0); leg(1,Math.PI);
+  const leftSwing = Math.sin(phase+Math.PI)*.22;
+  frustumLocal(base,yaw,[-.31,2.12,0],[-.36,1.72,leftSwing],.055,.05,5,'#263b54');
+  frustumLocal(base,yaw,[-.36,1.72,leftSwing],[-.28,1.38,-leftSwing*.6],.05,.04,5,'#263b54');
+  const handL = [-.28,1.34,-leftSwing*.6]; ellipsoidLocal(base,yaw,handL,[.055,.05,.055],'#d7aa82',5,3);
+  const handR = [.42,1.48,.55 + .04*Math.sin(phase)];
+  frustumLocal(base,yaw,[.31,2.1,0],[.42,1.75,.32],.055,.05,5,'#263b54');
+  frustumLocal(base,yaw,[.42,1.75,.32],handR,.05,.04,5,'#263b54');
+  ellipsoidLocal(base,yaw,handR,[.055,.05,.055],'#d7aa82',5,3);
+  return {base,yaw,hand:localToWorld(base,yaw,handR), x};
+}
+
+function addWhippet(base,yaw,phase,coat,accent=coat,run=1){
+  const bob = .025*Math.sin(phase*2);
+  const b = [base[0], base[1]+bob, base[2]];
+  boxLocal(b,yaw,[0,.61,0],[.28,.25,1.02],coat);
+  ellipsoidLocal(b,yaw,[0,.66,.18],[.18,.22,.38],coat,6,3);
+  ellipsoidLocal(b,yaw,[0,.64,-.34],[.18,.2,.28],accent,6,3);
+  frustumLocal(b,yaw,[0,.76,.42],[0,.92,.74],.09,.07,6,coat);
+  boxLocal(b,yaw,[0,.92,.88],[.20,.17,.29],coat);
+  frustumLocal(b,yaw,[0,.89,1.00],[0,.86,1.23],.075,.03,5,accent,true);
+  frustumLocal(b,yaw,[-.07,1.02,.84],[-.12,1.18,.83],.035,0,4,accent,true);
+  frustumLocal(b,yaw,[.07,1.02,.84],[.12,1.18,.83],.035,0,4,accent,true);
+  boxLocal(b,yaw,[0,.79,.66],[.24,.055,.06],'#b44d43');
+  const legs = [
+    [-.12,.34,0], [.12,.34,Math.PI], [-.12,-.36,Math.PI], [.12,-.36,0]
+  ];
+  for(const [side,z0,off] of legs){
+    const p = phase + off, swing = Math.sin(p) * .22 * run, lift = Math.max(0, Math.cos(p)) * .16 * run;
+    const hip=[side,.55,z0], foot=[side,.055+lift,z0-swing], knee=[side,.30,(z0+foot[2])*.5 + (z0>0?.05:-.06)];
+    frustumLocal(b,yaw,hip,knee,.035,.027,5,coat); frustumLocal(b,yaw,knee,foot,.028,.020,5,accent);
+    boxLocal(b,yaw,[foot[0],.045,foot[2]+.035],[.085,.035,.13],accent);
+  }
+  let prev=[0,.70,-.54];
+  for(let i=1;i<=5;i++){
+    const f=i/5, wave=Math.sin(phase*1.2+i*.7)*.035*i;
+    const next=[wave,.70+Math.sin(f*Math.PI)*.32,-.54-.17*i];
+    frustumLocal(b,yaw,prev,next,.032*(1-f*.45),.026*(1-f),5,accent);
+    prev=next;
+  }
+  return {collar:localToWorld(b,yaw,[0,.81,.66])};
+}
+
+function addScene(t){
+  tris = [];
+  addGround(); addTree(-7.5,-4.6,1.12); addTree(6.8,4.1,.95);
+  const man = addMan(t);
+  const leadBase = localToWorld(man.base, man.yaw, [.72,0,1.28]); leadBase[1]=0;
+  const lead = addWhippet(leadBase, man.yaw + .08*Math.sin(t*2.1), t*8.2, '#c99361', '#f0d0a5', .9);
+  frustumWorld(man.hand, lead.collar, .015, .012, 4, '#4b2d24');
+  const x2 = ((t*1.06 + 1.6) % 18) - 9, y2 = yawForPath(x2);
+  addWhippet([x2,0,curveZ(x2)-1.65+.28*Math.sin(t*1.7)], y2+.18*Math.sin(t*2.3), t*9.8, '#e0c194', '#f6e5c4', 1.25);
+  const x3 = ((t*1.18 + 11.5) % 18) - 9, y3 = yawForPath(x3);
+  addWhippet([x3,0,curveZ(x3)+1.55+.34*Math.cos(t*1.3)], y3-.22*Math.sin(t*2), t*10.6+1.5, '#696765', '#dcd5c9', 1.35);
+}
+
+const cam = {yaw:-.95,pitch:.48,dist:10.5, tyaw:-.95,tpitch:.48,tdist:10.5, target:[0,1.05,0]};
+let dragging=false, lx=0, ly=0;
+canvas.addEventListener('pointerdown',e=>{ dragging=true; lx=e.clientX; ly=e.clientY; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove',e=>{
+  if(!dragging) return;
+  const dx=e.clientX-lx, dy=e.clientY-ly; lx=e.clientX; ly=e.clientY;
+  cam.tyaw -= dx*.006; cam.tpitch = clamp(cam.tpitch + dy*.005, -.05, 1.25);
+});
+canvas.addEventListener('pointerup',()=>dragging=false);
+canvas.addEventListener('wheel',e=>{ e.preventDefault(); cam.tdist = clamp(cam.tdist * Math.exp(e.deltaY*.001), 5.2, 18); }, {passive:false});
+addEventListener('keydown',e=>{ if(e.key.toLowerCase()==='d') debug.hidden = !debug.hidden; });
+
+let viewRight=[1,0,0], viewUp=[0,1,0], viewForward=[0,0,1], eye=[0,0,0];
+function updateCamera(){
+  cam.yaw = mix(cam.yaw, cam.tyaw, .11); cam.pitch = mix(cam.pitch, cam.tpitch, .11); cam.dist = mix(cam.dist, cam.tdist, .12);
+  const cp=Math.cos(cam.pitch);
+  eye = [cam.target[0] + Math.sin(cam.yaw)*cp*cam.dist, cam.target[1] + Math.sin(cam.pitch)*cam.dist, cam.target[2] + Math.cos(cam.yaw)*cp*cam.dist];
+  viewForward = norm(sub(cam.target, eye));
+  viewRight = norm(cross(viewForward, [0,1,0]));
+  viewUp = norm(cross(viewRight, viewForward));
+}
+function project(p){
+  const d = sub(p, eye);
+  const x = dot(d, viewRight), y = dot(d, viewUp), z = dot(d, viewForward);
+  if(z < .08) return null;
+  const focal = H * .72;
+  return {x: W*.5 + x*focal/z, y: H*.5 - y*focal/z, z};
+}
+const light = norm([-.45,.85,-.25]);
+function render(t){
+  const sky = ctx.createLinearGradient(0,0,0,H);
+  sky.addColorStop(0,'#cfeeff'); sky.addColorStop(.55,'#edf8ff'); sky.addColorStop(1,'#dff1d2');
+  ctx.fillStyle = sky; ctx.fillRect(0,0,W,H);
+  addScene(t); updateCamera();
+  const faceCount = tris.length, vertexCount = faceCount*3;
+  const draw=[];
+  for(const f of tris){
+    const a=f.v[0], b=f.v[1], c=f.v[2];
+    const pa=project(a), pb=project(b), pc=project(c);
+    if(!pa||!pb||!pc) continue;
+    const n = norm(cross(sub(b,a), sub(c,a)));
+    const k = .55 + Math.abs(dot(n, light))*.38 + Math.max(0,n[1])*.1;
+    draw.push({p:[pa,pb,pc], z:(pa.z+pb.z+pc.z)/3, color:shaded(f.color,k)});
+  }
+  draw.sort((a,b)=>b.z-a.z);
+  ctx.lineJoin='round';
+  for(const f of draw){
+    ctx.beginPath(); ctx.moveTo(f.p[0].x,f.p[0].y); ctx.lineTo(f.p[1].x,f.p[1].y); ctx.lineTo(f.p[2].x,f.p[2].y); ctx.closePath();
+    ctx.fillStyle=f.color; ctx.fill();
+    ctx.strokeStyle='rgba(27,35,30,.13)'; ctx.lineWidth=.65; ctx.stroke();
+  }
+  return {faceCount, vertexCount, drawn:draw.length};
+}
+
+let last=performance.now(), fps=60, lastDebug=0, stats={faceCount:0,vertexCount:0,drawn:0};
+function frame(now){
+  const dt=Math.min(.05,(now-last)/1000); last=now; fps = fps*.9 + (1/Math.max(dt,.001))*.1;
+  stats = render(now/1000);
+  if(now-lastDebug>120){
+    debug.textContent = `FPS ${fps.toFixed(0)}\nvertices ${stats.vertexCount}  faces ${stats.faceCount}  drawn ${stats.drawn}\ncamera yaw ${cam.yaw.toFixed(2)}  pitch ${cam.pitch.toFixed(2)}  zoom ${cam.dist.toFixed(1)}\nmouse drag: orbit   wheel: zoom   D: overlay`;
+    lastDebug=now;
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
