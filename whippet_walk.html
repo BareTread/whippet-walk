@@ -52,11 +52,21 @@ function shaded(hex, k){
   const c = rgb(hex); k = clamp(k,0,1.25);
   return `rgb(${Math.round(c[0]*k)},${Math.round(c[1]*k)},${Math.round(c[2]*k)})`;
 }
-function paintFor(hex,k,z,n){
+function paintFor(hex,k,z,n,centroid){
   if(hex[0] !== '#') return {fill:hex, stroke:'rgba(0,0,0,0)', line:.1};
   const c=rgb(hex), fog=clamp((z-8)/18,0,.42), sky=[207,238,255];
   k=clamp(k,0,1.25);
-  const r=Math.round(mix(c[0]*k,sky[0],fog)), g=Math.round(mix(c[1]*k,sky[1],fog)), b=Math.round(mix(c[2]*k,sky[2],fog));
+  // --- Change 1: Rim lighting ---
+  let rimR=0, rimG=0, rimB=0;
+  if(centroid){
+    const viewDir = norm(sub(eye, centroid));
+    const NdotV = Math.max(0, dot(n, viewDir));
+    const rim = Math.pow(1.0 - NdotV, 3.0) * 0.45;
+    rimR = rim * 190; rimG = rim * 217; rimB = rim * 255;
+  }
+  const r=Math.round(clamp(mix(c[0]*k,sky[0],fog)+rimR,0,255));
+  const g=Math.round(clamp(mix(c[1]*k,sky[1],fog)+rimG,0,255));
+  const b=Math.round(clamp(mix(c[2]*k,sky[2],fog)+rimB,0,255));
   const silhouette=1-Math.abs(dot(n,viewForward));
   const a=clamp(.055+silhouette*.16-z*.004,.035,.2);
   return {fill:`rgb(${r},${g},${b})`, stroke:`rgba(${Math.round(r*.55)},${Math.round(g*.55)},${Math.round(b*.55)},${a})`, line:.35+silhouette*.45};
@@ -115,6 +125,20 @@ function ellipsoidLocal(base,yaw,center,scale,color,seg=7,rings=4){
   }
 }
 
+function grassTuft(p,lean=0,color='#4f9d45'){
+  const h=.16+.04*Math.sin(p[0]*2.1+p[2]);
+  tri([p[0]-.045,p[1]+.018,p[2]],[p[0]+.035,p[1]+.018,p[2]],[p[0]+lean,p[1]+h,p[2]+.025],color);
+  tri([p[0],p[1]+.015,p[2]-.045],[p[0]+.025,p[1]+.015,p[2]+.04],[p[0]-lean*.7,p[1]+h*.82,p[2]+lean],color);
+}
+function flower(p,color){
+  frustumWorld([p[0],.02,p[2]],[p[0],.13,p[2]],.008,.006,4,'#4a9b42');
+  ellipsoidLocal([p[0],.13,p[2]],0,[0,0,0],[.035,.025,.035],color,5,2);
+}
+function rock(x,z,s){
+  ellipsoidLocal([x,.06,z],.4*Math.sin(x),[0,0,0],[.25*s,.13*s,.18*s],'#87908a',6,3);
+  ellipsoidLocal([x+.18*s,.045,z-.08*s],.2,[0,0,0],[.15*s,.09*s,.12*s],'#737d78',5,2);
+}
+
 function addGround(){
   const grass='#83c86b', grass2='#6ebf62', path='#c9ad77';
   const gy=(x,z)=>.018*Math.sin(x*.55)*Math.cos(z*.42);
@@ -134,13 +158,19 @@ function addGround(){
     const z=curveZ(x), dz=curveDz(x), n=norm([-dz,0,1]);
     pts.push({l:[x+n[0]*1.05,.026,z+n[2]*1.05], r:[x-n[0]*1.05,.026,z-n[2]*1.05]});
   }
-  for(let i=0;i<pts.length-1;i++) quad(pts[i].l, pts[i+1].l, pts[i+1].r, pts[i].r, path);
+  for(let i=0;i<pts.length-1;i++){
+    quad(pts[i].l, pts[i+1].l, pts[i+1].r, pts[i].r, path);
+    if(i%2===0){ grassTuft(pts[i].l,.055,'#559c41'); grassTuft(pts[i].r,-.055,'#5da948'); }
+  }
+  const flowers=[[-10,-6,'#fff2a8'],[-8.2,5.3,'#f8bfd2'],[-5.8,-5.4,'#fef9c3'],[-3.4,4.8,'#c4e0ff'],[1.8,-5.8,'#f8bfd2'],[4.4,5.9,'#fff2a8'],[8.6,-5.2,'#c4e0ff'],[11.2,4.6,'#fef9c3']];
+  for(const [x,z,c] of flowers) flower([x,0,z],c);
 }
-function addTree(x,z,s){
+function addTree(x,z,s,t=0){
+  const sway=Math.sin(t*1.15+x*.7+z*.3)*.08*s;
   frustumWorld([x,0,z],[x,.85*s,z],.14*s,.11*s,6,'#855b33',true);
-  frustumWorld([x,.55*s,z],[x,1.75*s,z],.8*s,.05*s,7,'#3f8d4d',true);
-  frustumWorld([x,.95*s,z],[x,2.22*s,z],.62*s,0,7,'#4fa65a',true);
-  frustumWorld([x-.1*s,1.05*s,z+.06*s],[x-.25*s,1.95*s,z+.06*s],.45*s,0,6,'#61b961',true);
+  frustumWorld([x,.55*s,z],[x+sway,1.75*s,z],.8*s,.05*s,7,'#3f8d4d',true);
+  frustumWorld([x,.95*s,z],[x+sway*1.4,2.22*s,z],.62*s,0,7,'#4fa65a',true);
+  frustumWorld([x-.1*s,1.05*s,z+.06*s],[x-.25*s+sway,1.95*s,z+.06*s],.45*s,0,6,'#61b961',true);
 }
 
 function addMan(t){
@@ -172,7 +202,9 @@ function addMan(t){
   return {base,yaw,hand:localToWorld(base,yaw,handR), x};
 }
 
-function addWhippet(base,yaw,phase,coat,accent=coat,run=1){
+// --- Change 2: Secondary motion state per whippet ---
+const whippetLag = [{},{},{}];
+function addWhippet(base,yaw,phase,coat,accent=coat,run=1,whippetIdx=0){
   const bob = .025*Math.sin(phase*2);
   const b = [base[0], base[1]+bob, base[2]];
   ellipsoidLocal(b,yaw,[0,.66,.22],[.18,.27,.38],coat,6,3);       // deep chest
@@ -180,9 +212,20 @@ function addWhippet(base,yaw,phase,coat,accent=coat,run=1){
   frustumLocal(b,yaw,[0,.78,.18],[0,.72,-.55],.12,.07,6,coat);     // arched back bridge
   frustumLocal(b,yaw,[0,.76,.42],[0,.92,.74],.09,.07,6,coat);
   boxLocal(b,yaw,[0,.92,.88],[.20,.17,.29],coat);
+  // Snout (unchanged)
   frustumLocal(b,yaw,[0,.89,1.00],[0,.86,1.30],.075,.026,5,accent,true);
-  frustumLocal(b,yaw,[-.07,1.02,.84],[-.12,1.18,.83],.035,0,4,accent,true);
-  frustumLocal(b,yaw,[.07,1.02,.84],[.12,1.18,.83],.035,0,4,accent,true);
+  // --- Ears with secondary motion lag ---
+  const lag = whippetLag[whippetIdx];
+  const earBaseL = localToWorld(b,yaw,[-.07,1.02,.84]);
+  const earBaseR = localToWorld(b,yaw,[.07,1.02,.84]);
+  const earTipL_target = localToWorld(b,yaw,[-.12,1.18,.83]);
+  const earTipR_target = localToWorld(b,yaw,[.12,1.18,.83]);
+  if(!lag.earL) { lag.earL = [...earTipL_target]; lag.earR = [...earTipR_target]; }
+  const earK = 0.12;
+  for(let i=0;i<3;i++){ lag.earL[i] += (earTipL_target[i]-lag.earL[i])*earK; lag.earR[i] += (earTipR_target[i]-lag.earR[i])*earK; }
+  lag.earL[1] -= 0.001; lag.earR[1] -= 0.001; // slight droop
+  frustumWorld(earBaseL, lag.earL, .035, 0, 4, accent, true);
+  frustumWorld(earBaseR, lag.earR, .035, 0, 4, accent, true);
   boxLocal(b,yaw,[0,.79,.66],[.24,.055,.06],'#b44d43');
   const legs = [
     [-.12,.34,0], [.12,.34,Math.PI], [-.12,-.36,Math.PI], [.12,-.36,0]
@@ -193,12 +236,23 @@ function addWhippet(base,yaw,phase,coat,accent=coat,run=1){
     frustumLocal(b,yaw,hip,knee,.035,.027,5,coat); frustumLocal(b,yaw,knee,foot,.028,.020,5,accent);
     boxLocal(b,yaw,[foot[0],.045,foot[2]+.035],[.085,.035,.13],accent);
   }
+  // --- Tail with secondary motion lag ---
+  if(!lag.tail) lag.tail = [];
   let prev=[0,.70,-.54];
   for(let i=1;i<=5;i++){
     const f=i/5, wave=Math.sin(phase*1.2+i*.7)*.035*i;
-    const next=[wave,.70+Math.sin(f*Math.PI)*.32,-.54-.17*i];
-    frustumLocal(b,yaw,prev,next,.032*(1-f*.45),.026*(1-f),5,accent);
-    prev=next;
+    const target=[wave,.70+Math.sin(f*Math.PI)*.32,-.54-.17*i];
+    const targetW = localToWorld(b,yaw,target);
+    if(!lag.tail[i-1]) lag.tail[i-1] = [...targetW];
+    const tk = 0.06 + f*0.04; // softer at tip
+    for(let j=0;j<3;j++) lag.tail[i-1][j] += (targetW[j]-lag.tail[i-1][j])*tk;
+    lag.tail[i-1][1] -= 0.002 * i; // gravity droop on lagged tip
+    const prevW = localToWorld(b,yaw,prev);
+    frustumWorld(prevW, lag.tail[i-1], .032*(1-f*.45), .026*(1-f), 5, accent);
+    // Reverse-transform lagged world pos back to local for next segment's prev
+    // Approximate: use the world position directly for the next frustum start
+    // We need local coords for prev, so we just keep prev as local and render uses world
+    prev=target;
   }
   return {collar:localToWorld(b,yaw,[0,.81,.66])};
 }
@@ -212,31 +266,136 @@ function ellipseShadow(center,yaw,sx,sz,alpha){
     tri(c,prev,p,`rgba(22,42,24,${alpha})`); prev=p;
   }
 }
-function addLeash(a,b,t){
-  let prev=a;
-  const sag=clamp(len(sub(a,b))*.12,.12,.32);
-  for(let i=1;i<=7;i++){
-    const u=i/7;
-    const p=[mix(a[0],b[0],u)+Math.sin(t*3+u*5)*.018, mix(a[1],b[1],u)-Math.sin(Math.PI*u)*sag, mix(a[2],b[2],u)];
-    frustumWorld(prev,p,.011,.010,4,'#4b2d24'); prev=p;
+// --- Change 3: Dust puff particle system ---
+const dustPool = [];
+const MAX_DUST = 30;
+let prevFootPhase = 0;
+function spawnDust(footX, footZ) {
+  for (let i = 0; i < 4 && dustPool.length < MAX_DUST; i++) {
+    dustPool.push({
+      x: footX + (Math.random() - 0.5) * 0.18,
+      y: 0.01,
+      z: footZ + (Math.random() - 0.5) * 0.18,
+      vx: (Math.random() - 0.5) * 0.008,
+      vy: 0.004 + Math.random() * 0.007,
+      vz: (Math.random() - 0.5) * 0.008,
+      alpha: 0.32,
+      size: 2.5 + Math.random() * 3.5,
+      life: 1.0
+    });
+  }
+}
+function updateDust() {
+  for (let i = dustPool.length - 1; i >= 0; i--) {
+    const p = dustPool[i];
+    p.x += p.vx; p.y += p.vy; p.z += p.vz;
+    p.vy *= 0.97;
+    p.life -= 0.016;
+    p.alpha = p.life * 0.28;
+    p.size += 0.12;
+    if (p.life <= 0) dustPool.splice(i, 1);
+  }
+}
+function renderDust() {
+  for (const p of dustPool) {
+    const pp = project([p.x, p.y, p.z]);
+    if (!pp || pp.z < 0.1) continue;
+    const sz = p.size * (H * 0.72) / pp.z;
+    ctx.globalAlpha = clamp(p.alpha, 0, 1);
+    ctx.fillStyle = 'rgba(185,175,155,1)';
+    ctx.beginPath();
+    ctx.arc(pp.x, pp.y, sz, 0, TAU);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// --- Change 4: Verlet leash physics ---
+const leashStates = [null, null, null];
+const LEASH_SEGS = 10;
+function addLeash(a, b, t, leashIdx=0) {
+  let st = leashStates[leashIdx];
+  const segLen = len(sub(a, b)) / LEASH_SEGS * 1.12; // slightly slack
+  if (!st) {
+    st = { pts: [], prev: [] };
+    for (let i = 0; i <= LEASH_SEGS; i++) {
+      const u = i / LEASH_SEGS;
+      const p = [mix(a[0],b[0],u), mix(a[1],b[1],u), mix(a[2],b[2],u)];
+      st.pts.push([...p]); st.prev.push([...p]);
+    }
+    leashStates[leashIdx] = st;
+  }
+  // Verlet integration
+  const GRAVITY = -0.0007;
+  const DAMPING = 0.97;
+  for (let i = 1; i < LEASH_SEGS; i++) {
+    const cur = st.pts[i], prv = st.prev[i];
+    const vx = (cur[0]-prv[0])*DAMPING, vy = (cur[1]-prv[1])*DAMPING, vz = (cur[2]-prv[2])*DAMPING;
+    prv[0]=cur[0]; prv[1]=cur[1]; prv[2]=cur[2];
+    cur[0]+=vx; cur[1]+=vy+GRAVITY; cur[2]+=vz;
+    if(cur[1] < 0.02) cur[1] = 0.02; // ground clamp
+  }
+  // Pin endpoints
+  st.pts[0][0]=a[0]; st.pts[0][1]=a[1]; st.pts[0][2]=a[2];
+  st.pts[LEASH_SEGS][0]=b[0]; st.pts[LEASH_SEGS][1]=b[1]; st.pts[LEASH_SEGS][2]=b[2];
+  st.prev[0][0]=a[0]; st.prev[0][1]=a[1]; st.prev[0][2]=a[2];
+  st.prev[LEASH_SEGS][0]=b[0]; st.prev[LEASH_SEGS][1]=b[1]; st.prev[LEASH_SEGS][2]=b[2];
+  // Distance constraints (3 iterations)
+  for (let iter = 0; iter < 3; iter++) {
+    for (let i = 0; i < LEASH_SEGS; i++) {
+      const p1=st.pts[i], p2=st.pts[i+1];
+      const dx=p2[0]-p1[0], dy=p2[1]-p1[1], dz=p2[2]-p1[2];
+      const d = Math.hypot(dx,dy,dz) || 0.001;
+      if(d > segLen) {
+        const corr = (d - segLen) / d * 0.5;
+        if(i > 0)          { p1[0]+=dx*corr; p1[1]+=dy*corr; p1[2]+=dz*corr; }
+        if(i < LEASH_SEGS-1){ p2[0]-=dx*corr; p2[1]-=dy*corr; p2[2]-=dz*corr; }
+      }
+    }
+    // Re-pin endpoints after constraints
+    st.pts[0][0]=a[0]; st.pts[0][1]=a[1]; st.pts[0][2]=a[2];
+    st.pts[LEASH_SEGS][0]=b[0]; st.pts[LEASH_SEGS][1]=b[1]; st.pts[LEASH_SEGS][2]=b[2];
+  }
+  // Render the chain
+  for (let i = 0; i < LEASH_SEGS; i++) {
+    frustumWorld(st.pts[i], st.pts[i+1], .011, .010, 4, '#4b2d24');
   }
 }
 
+// --- Change 5 prep: store man position for camera follow ---
+let manWorldPos = [0,1.05,0];
 function addScene(t){
   tris = [];
-  addGround(); addTree(-7.5,-4.6,1.12); addTree(6.8,4.1,.95);
+  addGround();
+  addTree(-7.5,-4.6,1.12,t); addTree(6.8,4.1,.95,t+.7); addTree(-11,5.7,.72,t+1.4); addTree(11,-6.2,.62,t+2.1);
+  rock(-6.4,3.2,.9); rock(7.9,-3.3,.75); rock(12.2,2.4,.55);
   const man = addMan(t);
+  manWorldPos = man.base;
+  // --- Dust puff trigger on man's footfalls ---
+  const phase = t * 5.15;
+  const footSignal = Math.sin(phase);
+  if(prevFootPhase < 0.95 && footSignal >= 0.95) {
+    const footWorld = localToWorld(man.base, man.yaw, [-.13, 0, -Math.sin(phase)*.25]);
+    spawnDust(footWorld[0], footWorld[2]);
+  }
+  const footSignal2 = Math.sin(phase + Math.PI);
+  if(prevFootPhase < 0.95 && footSignal2 >= 0.95) {
+    const footWorld = localToWorld(man.base, man.yaw, [.13, 0, Math.sin(phase)*.25]);
+    spawnDust(footWorld[0], footWorld[2]);
+  }
+  prevFootPhase = Math.max(footSignal, footSignal2) > 0.95 ? 1.0 : footSignal;
+  updateDust();
   ellipseShadow(man.base,man.yaw,.45,.82,.20);
   const leadBase = localToWorld(man.base, man.yaw, [.72,0,1.28]); leadBase[1]=0;
   ellipseShadow(leadBase,man.yaw,.38,.95,.16);
-  const lead = addWhippet(leadBase, man.yaw + .08*Math.sin(t*2.1), t*8.2, '#c99361', '#f0d0a5', .9);
-  addLeash(man.hand, lead.collar, t);
+  const lead = addWhippet(leadBase, man.yaw + .08*Math.sin(t*2.1), t*8.2, '#c99361', '#f0d0a5', .9, 0);
+  addLeash(man.hand, lead.collar, t, 0);
   const x2 = ((t*1.06 + 1.6) % 18) - 9, y2 = yawForPath(x2);
   const dog2=[x2,0,curveZ(x2)-1.65+.28*Math.sin(t*1.7)]; ellipseShadow(dog2,y2,.4,.95,.14);
-  addWhippet(dog2, y2+.18*Math.sin(t*2.3), t*9.8, '#e0c194', '#f6e5c4', 1.25);
+  addWhippet(dog2, y2+.18*Math.sin(t*2.3), t*9.8, '#e0c194', '#f6e5c4', 1.25, 1);
   const x3 = ((t*1.18 + 11.5) % 18) - 9, y3 = yawForPath(x3);
   const dog3=[x3,0,curveZ(x3)+1.55+.34*Math.cos(t*1.3)]; ellipseShadow(dog3,y3,.4,.95,.14);
-  addWhippet(dog3, y3-.22*Math.sin(t*2), t*10.6+1.5, '#696765', '#dcd5c9', 1.35);
+  addWhippet(dog3, y3-.22*Math.sin(t*2), t*10.6+1.5, '#696765', '#dcd5c9', 1.35, 2);
 }
 
 const cam = {yaw:-.95,pitch:.48,dist:10.5, tyaw:-.95,tpitch:.48,tdist:10.5, target:[0,1.05,0]};
@@ -253,6 +412,10 @@ addEventListener('keydown',e=>{ if(e.key.toLowerCase()==='d') debug.hidden = !de
 
 let viewRight=[1,0,0], viewUp=[0,1,0], viewForward=[0,0,1], eye=[0,0,0];
 function updateCamera(){
+  // --- Change 5: Soft camera follow — orbit center drifts toward man ---
+  const followRate = 0.015;
+  cam.target[0] += (manWorldPos[0] - cam.target[0]) * followRate;
+  cam.target[2] += (manWorldPos[2] - cam.target[2]) * followRate;
   cam.yaw = mix(cam.yaw, cam.tyaw, .11); cam.pitch = mix(cam.pitch, cam.tpitch, .11); cam.dist = mix(cam.dist, cam.tdist, .12);
   const cp=Math.cos(cam.pitch);
   eye = [cam.target[0] + Math.sin(cam.yaw)*cp*cam.dist, cam.target[1] + Math.sin(cam.pitch)*cam.dist, cam.target[2] + Math.cos(cam.yaw)*cp*cam.dist];
@@ -283,7 +446,9 @@ function render(t){
     const hemi = dot(n, light)*.5+.5;
     const k = .42 + hemi*hemi*.55 + Math.max(0,n[1])*.13;
     const z=(pa.z+pb.z+pc.z)/3;
-    draw.push({p:[pa,pb,pc], z, paint:paintFor(f.color,k,z,n)});
+    const sortZ = z - (f.color==='#c9ad77' ? .12 : 0);
+    const centroid = [(a[0]+b[0]+c[0])/3, (a[1]+b[1]+c[1])/3, (a[2]+b[2]+c[2])/3];
+    draw.push({p:[pa,pb,pc], z:sortZ, paint:paintFor(f.color,k,z,n,centroid)});
   }
   draw.sort((a,b)=>b.z-a.z);
   ctx.lineJoin='round';
@@ -292,6 +457,8 @@ function render(t){
     ctx.fillStyle=f.paint.fill; ctx.fill();
     ctx.strokeStyle=f.paint.stroke; ctx.lineWidth=f.paint.line; ctx.stroke();
   }
+  // --- Change 3: Render dust puffs on top ---
+  renderDust();
   return {faceCount, vertexCount, drawn:draw.length};
 }
 
