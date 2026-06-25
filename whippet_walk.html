@@ -48,8 +48,18 @@ function rgb(hex){
   const out=[r,g,b]; rgb.cache.set(hex,out); return out;
 }
 function shaded(hex, k){
+  if(hex[0] !== '#') return hex;
   const c = rgb(hex); k = clamp(k,0,1.25);
   return `rgb(${Math.round(c[0]*k)},${Math.round(c[1]*k)},${Math.round(c[2]*k)})`;
+}
+function paintFor(hex,k,z,n){
+  if(hex[0] !== '#') return {fill:hex, stroke:'rgba(0,0,0,0)', line:.1};
+  const c=rgb(hex), fog=clamp((z-8)/18,0,.42), sky=[207,238,255];
+  k=clamp(k,0,1.25);
+  const r=Math.round(mix(c[0]*k,sky[0],fog)), g=Math.round(mix(c[1]*k,sky[1],fog)), b=Math.round(mix(c[2]*k,sky[2],fog));
+  const silhouette=1-Math.abs(dot(n,viewForward));
+  const a=clamp(.055+silhouette*.16-z*.004,.035,.2);
+  return {fill:`rgb(${r},${g},${b})`, stroke:`rgba(${Math.round(r*.55)},${Math.round(g*.55)},${Math.round(b*.55)},${a})`, line:.35+silhouette*.45};
 }
 
 let tris = [];
@@ -107,7 +117,14 @@ function ellipsoidLocal(base,yaw,center,scale,color,seg=7,rings=4){
 
 function addGround(){
   const grass='#83c86b', grass2='#6ebf62', path='#c9ad77';
-  quad([-18,0,-10],[18,0,-10],[18,0,10],[-18,0,10],grass);
+  const gy=(x,z)=>.018*Math.sin(x*.55)*Math.cos(z*.42);
+  for(let x=-18;x<18;x+=2){
+    for(let z=-10;z<10;z+=2){
+      const c=((x+z)&2)?grass:grass2;
+      const a=[x,gy(x,z),z], b=[x+2,gy(x+2,z),z], c1=[x+2,gy(x+2,z+2),z+2], d=[x,gy(x,z+2),z+2];
+      quad(a,b,c1,d,c);
+    }
+  }
   for(let i=-18;i<18;i+=3){
     const z1=-9+((i*i)%7), z2=z1+1.6;
     tri([i,0.012,z1],[i+1.8,0.012,z1+.3],[i+.5,0.012,z2], i%2 ? '#79bd63' : grass2);
@@ -158,12 +175,12 @@ function addMan(t){
 function addWhippet(base,yaw,phase,coat,accent=coat,run=1){
   const bob = .025*Math.sin(phase*2);
   const b = [base[0], base[1]+bob, base[2]];
-  boxLocal(b,yaw,[0,.61,0],[.28,.25,1.02],coat);
-  ellipsoidLocal(b,yaw,[0,.66,.18],[.18,.22,.38],coat,6,3);
-  ellipsoidLocal(b,yaw,[0,.64,-.34],[.18,.2,.28],accent,6,3);
+  ellipsoidLocal(b,yaw,[0,.66,.22],[.18,.27,.38],coat,6,3);       // deep chest
+  ellipsoidLocal(b,yaw,[0,.62,-.28],[.13,.16,.34],accent,6,3);     // tucked waist
+  frustumLocal(b,yaw,[0,.78,.18],[0,.72,-.55],.12,.07,6,coat);     // arched back bridge
   frustumLocal(b,yaw,[0,.76,.42],[0,.92,.74],.09,.07,6,coat);
   boxLocal(b,yaw,[0,.92,.88],[.20,.17,.29],coat);
-  frustumLocal(b,yaw,[0,.89,1.00],[0,.86,1.23],.075,.03,5,accent,true);
+  frustumLocal(b,yaw,[0,.89,1.00],[0,.86,1.30],.075,.026,5,accent,true);
   frustumLocal(b,yaw,[-.07,1.02,.84],[-.12,1.18,.83],.035,0,4,accent,true);
   frustumLocal(b,yaw,[.07,1.02,.84],[.12,1.18,.83],.035,0,4,accent,true);
   boxLocal(b,yaw,[0,.79,.66],[.24,.055,.06],'#b44d43');
@@ -186,17 +203,40 @@ function addWhippet(base,yaw,phase,coat,accent=coat,run=1){
   return {collar:localToWorld(b,yaw,[0,.81,.66])};
 }
 
+function ellipseShadow(center,yaw,sx,sz,alpha){
+  const base=[center[0],.031,center[2]], c=localToWorld(base,yaw,[0,0,0]), steps=13;
+  let prev=null, first=null;
+  for(let i=0;i<=steps;i++){
+    const q=i/steps*TAU, p=localToWorld(base,yaw,[Math.cos(q)*sx,0,Math.sin(q)*sz]);
+    if(i===0){ first=p; prev=p; continue; }
+    tri(c,prev,p,`rgba(22,42,24,${alpha})`); prev=p;
+  }
+}
+function addLeash(a,b,t){
+  let prev=a;
+  const sag=clamp(len(sub(a,b))*.12,.12,.32);
+  for(let i=1;i<=7;i++){
+    const u=i/7;
+    const p=[mix(a[0],b[0],u)+Math.sin(t*3+u*5)*.018, mix(a[1],b[1],u)-Math.sin(Math.PI*u)*sag, mix(a[2],b[2],u)];
+    frustumWorld(prev,p,.011,.010,4,'#4b2d24'); prev=p;
+  }
+}
+
 function addScene(t){
   tris = [];
   addGround(); addTree(-7.5,-4.6,1.12); addTree(6.8,4.1,.95);
   const man = addMan(t);
+  ellipseShadow(man.base,man.yaw,.45,.82,.20);
   const leadBase = localToWorld(man.base, man.yaw, [.72,0,1.28]); leadBase[1]=0;
+  ellipseShadow(leadBase,man.yaw,.38,.95,.16);
   const lead = addWhippet(leadBase, man.yaw + .08*Math.sin(t*2.1), t*8.2, '#c99361', '#f0d0a5', .9);
-  frustumWorld(man.hand, lead.collar, .015, .012, 4, '#4b2d24');
+  addLeash(man.hand, lead.collar, t);
   const x2 = ((t*1.06 + 1.6) % 18) - 9, y2 = yawForPath(x2);
-  addWhippet([x2,0,curveZ(x2)-1.65+.28*Math.sin(t*1.7)], y2+.18*Math.sin(t*2.3), t*9.8, '#e0c194', '#f6e5c4', 1.25);
+  const dog2=[x2,0,curveZ(x2)-1.65+.28*Math.sin(t*1.7)]; ellipseShadow(dog2,y2,.4,.95,.14);
+  addWhippet(dog2, y2+.18*Math.sin(t*2.3), t*9.8, '#e0c194', '#f6e5c4', 1.25);
   const x3 = ((t*1.18 + 11.5) % 18) - 9, y3 = yawForPath(x3);
-  addWhippet([x3,0,curveZ(x3)+1.55+.34*Math.cos(t*1.3)], y3-.22*Math.sin(t*2), t*10.6+1.5, '#696765', '#dcd5c9', 1.35);
+  const dog3=[x3,0,curveZ(x3)+1.55+.34*Math.cos(t*1.3)]; ellipseShadow(dog3,y3,.4,.95,.14);
+  addWhippet(dog3, y3-.22*Math.sin(t*2), t*10.6+1.5, '#696765', '#dcd5c9', 1.35);
 }
 
 const cam = {yaw:-.95,pitch:.48,dist:10.5, tyaw:-.95,tpitch:.48,tdist:10.5, target:[0,1.05,0]};
@@ -240,15 +280,17 @@ function render(t){
     const pa=project(a), pb=project(b), pc=project(c);
     if(!pa||!pb||!pc) continue;
     const n = norm(cross(sub(b,a), sub(c,a)));
-    const k = .55 + Math.abs(dot(n, light))*.38 + Math.max(0,n[1])*.1;
-    draw.push({p:[pa,pb,pc], z:(pa.z+pb.z+pc.z)/3, color:shaded(f.color,k)});
+    const hemi = dot(n, light)*.5+.5;
+    const k = .42 + hemi*hemi*.55 + Math.max(0,n[1])*.13;
+    const z=(pa.z+pb.z+pc.z)/3;
+    draw.push({p:[pa,pb,pc], z, paint:paintFor(f.color,k,z,n)});
   }
   draw.sort((a,b)=>b.z-a.z);
   ctx.lineJoin='round';
   for(const f of draw){
     ctx.beginPath(); ctx.moveTo(f.p[0].x,f.p[0].y); ctx.lineTo(f.p[1].x,f.p[1].y); ctx.lineTo(f.p[2].x,f.p[2].y); ctx.closePath();
-    ctx.fillStyle=f.color; ctx.fill();
-    ctx.strokeStyle='rgba(27,35,30,.13)'; ctx.lineWidth=.65; ctx.stroke();
+    ctx.fillStyle=f.paint.fill; ctx.fill();
+    ctx.strokeStyle=f.paint.stroke; ctx.lineWidth=f.paint.line; ctx.stroke();
   }
   return {faceCount, vertexCount, drawn:draw.length};
 }
