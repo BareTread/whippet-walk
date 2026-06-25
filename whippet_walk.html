@@ -147,10 +147,11 @@ function addTree(x,z,s,t=0){
 function addMan(t){
   const x = ((t*.78 + 9) % 18) - 9;
   const yaw = yawForPath(x);
-  const base = [x, .035*Math.sin(t*10.2), curveZ(x)];
   const phase = t * 5.15;
+  const base = localToWorld([x, .035*Math.sin(t*10.2), curveZ(x)], yaw, [Math.sin(phase)*.025,0,0]);
   boxLocal(base,yaw,[0,1.72,0],[.48,1.05,.34],'#2b4058');
   boxLocal(base,yaw,[0,1.22,-.01],[.52,.42,.37],'#20354a');
+  boxLocal(base,yaw,[0,2.07,.19],[.34,.055,.045],'#e9fff3');
   ellipsoidLocal(base,yaw,[0,2.42,.02],[.24,.28,.22],'#d7aa82',7,4);
   ellipsoidLocal(base,yaw,[0,2.33,.17],[.22,.20,.11],'#4a2b1e',7,3); // distinct beard
   boxLocal(base,yaw,[0,2.63,-.02],[.35,.12,.28],'#3a2a20');
@@ -173,12 +174,13 @@ function addMan(t){
   return {base,yaw,hand:localToWorld(base,yaw,handR), x};
 }
 
-function addWhippet(base,yaw,phase,coat,accent=coat,run=1){
+function addWhippet(base,yaw,phase,coat,accent=coat,run=1,tailSpeed=1,tailHeight=1,backStripe=null){
   const bob = .025*Math.sin(phase*2);
   const b = [base[0], base[1]+bob, base[2]];
   ellipsoidLocal(b,yaw,[0,.66,.22],[.18,.27,.38],coat,6,3);       // deep chest
   ellipsoidLocal(b,yaw,[0,.62,-.28],[.13,.16,.34],accent,6,3);     // tucked waist
   frustumLocal(b,yaw,[0,.78,.18],[0,.72,-.55],.12,.07,6,coat);     // arched back bridge
+  if(backStripe) ellipsoidLocal(b,yaw,[0,.83,.02],[.105,.035,.36],backStripe,6,2);
   frustumLocal(b,yaw,[0,.76,.42],[0,.92,.74],.09,.07,6,coat);
   boxLocal(b,yaw,[0,.92,.88],[.20,.17,.29],coat);
   frustumLocal(b,yaw,[0,.89,1.00],[0,.86,1.30],.075,.026,5,accent,true);
@@ -197,8 +199,8 @@ function addWhippet(base,yaw,phase,coat,accent=coat,run=1){
   }
   let prev=[0,.70,-.54];
   for(let i=1;i<=5;i++){
-    const f=i/5, wave=Math.sin(phase*1.2+i*.7)*.035*i;
-    const next=[wave,.70+Math.sin(f*Math.PI)*.32,-.54-.17*i];
+    const f=i/5, wave=Math.sin(phase*1.2*tailSpeed+i*.7)*.035*i*tailHeight;
+    const next=[wave,.70+Math.sin(f*Math.PI)*.32*(.88+.12*tailHeight),-.54-.17*i];
     frustumLocal(b,yaw,prev,next,.032*(1-f*.45),.026*(1-f),5,accent);
     prev=next;
   }
@@ -216,11 +218,13 @@ function ellipseShadow(center,yaw,sx,sz,alpha){
 }
 function addLeash(a,b,t){
   let prev=a;
-  const sag=clamp(len(sub(a,b))*.12,.12,.32);
+  const d=len(sub(a,b));
+  const slack=1-clamp((d-1.25)/.9,0,1);
+  const sag=clamp(mix(.045,.33,slack)+Math.sin(t*2.2)*.018,.035,.35);
   for(let i=1;i<=7;i++){
     const u=i/7;
     const p=[mix(a[0],b[0],u)+Math.sin(t*3+u*5)*.018, mix(a[1],b[1],u)-Math.sin(Math.PI*u)*sag, mix(a[2],b[2],u)];
-    frustumWorld(prev,p,.011,.010,4,'#4b2d24'); prev=p;
+    frustumWorld(prev,p,.013,.011,4,'#4b2d24'); prev=p;
   }
 }
 
@@ -234,14 +238,14 @@ function addScene(t){
   ellipseShadow(man.base,man.yaw,.45,.82,.20);
   const leadBase = localToWorld(man.base, man.yaw, [.72,0,1.28]); leadBase[1]=0;
   ellipseShadow(leadBase,man.yaw,.38,.95,.16);
-  const lead = addWhippet(leadBase, man.yaw + .08*Math.sin(t*2.1), t*8.2, '#c99361', '#f0d0a5', .9);
+  const lead = addWhippet(leadBase, man.yaw + .08*Math.sin(t*2.1), t*8.2, '#c99361', '#f0d0a5', .9, .82, .72, '#e8c89a');
   addLeash(man.hand, lead.collar, t);
   const x2 = ((t*1.06 + 1.6) % 18) - 9, y2 = yawForPath(x2);
   const dog2=[x2,0,curveZ(x2)-1.65+.28*Math.sin(t*1.7)]; ellipseShadow(dog2,y2,.4,.95,.14);
-  addWhippet(dog2, y2+.18*Math.sin(t*2.3), t*9.8, '#e0c194', '#f6e5c4', 1.25);
+  addWhippet(dog2, y2+.18*Math.sin(t*2.3), t*9.8, '#e0c194', '#f6e5c4', 1.25, 1.35, 1.02);
   const x3 = ((t*1.18 + 11.5) % 18) - 9, y3 = yawForPath(x3);
   const dog3=[x3,0,curveZ(x3)+1.55+.34*Math.cos(t*1.3)]; ellipseShadow(dog3,y3,.4,.95,.14);
-  addWhippet(dog3, y3-.22*Math.sin(t*2), t*10.6+1.5, '#696765', '#dcd5c9', 1.35);
+  addWhippet(dog3, y3-.22*Math.sin(t*2), t*10.6+1.5, '#696765', '#dcd5c9', 1.35, 1.65, 1.16);
 }
 
 const cam = {yaw:-.95,pitch:.48,dist:10.5, tyaw:-.95,tpitch:.48,tdist:10.5, target:[0,1.05,0]};
